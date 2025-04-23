@@ -2,201 +2,256 @@ import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import DAOPlatformAbi from "../artifacts/contracts/DAOPlatform.sol/DAOPlatform.json";
 
-export default function DAOPlatform() {
-  const [ethWallet, setEthWallet] = useState(undefined);
-  const [account, setAccount] = useState(undefined);
-  const [DAOPlatform, setDAOPlatform] = useState(undefined);
-  const [proposals, setProposals] = useState([]);
+export default function DAOPlatform({ provider }) {
+  const [account, setAccount] = useState(null);
+  const [contract, setContract] = useState(null);
   const [proposalDescription, setProposalDescription] = useState("");
+  const [proposalDuration, setProposalDuration] = useState("");
+  const [loading, setLoading] = useState(false);
   const [proposalId, setProposalId] = useState("");
-  const [tokenBalance, setTokenBalance] = useState(0);
-  const [message, setMessage] = useState("");
+  const [proposals, setProposals] = useState([]);
+  
 
-  const contractAddress = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707";
+  const contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
   const DAOPlatformABI = DAOPlatformAbi.abi;
 
   useEffect(() => {
-    if (window.ethereum) {
-      setEthWallet(window.ethereum);
-    }
+    connectWallet();
   }, []);
 
-  const connectAccount = async () => {
-    if (!ethWallet) {
-      alert("MetaMask wallet is required to connect");
-      return;
-    }
-    try {
-      const accounts = await ethWallet.request({ method: "eth_requestAccounts" });
+  const connectWallet = async () => {
+    if (window.ethereum) {
+      const accounts = await window.ethereum.request({
+        method: "eth_requestAccounts",
+      });
       setAccount(accounts[0]);
-      getDAOPlatformContract(accounts[0]);
-    } catch (error) {
-      setMessage("Error connecting account: " + (error.message || error));
-    }
-  };
 
-  const getDAOPlatformContract = (userAccount) => {
-    const provider = new ethers.providers.Web3Provider(ethWallet);
-    const signer = provider.getSigner();
-    const DAOPlatformContract = new ethers.Contract(contractAddress, DAOPlatformABI, signer);
-    setDAOPlatform(DAOPlatformContract);
-    getTokenBalance(DAOPlatformContract, userAccount);
-  };
-
-  const getTokenBalance = async (contract, userAccount) => {
-    try {
-      const balance = await contract.balanceOf(userAccount);
-      setTokenBalance(parseInt(balance.toString()));
-    } catch (error) {
-      console.error("Error fetching token balance:", error);
+      const signer = new ethers.providers.Web3Provider(window.ethereum).getSigner();
+      const contractInstance = new ethers.Contract(contractAddress, DAOPlatformABI, signer);
+      setContract(contractInstance);
+      fetchProposals(contractInstance);
+    } else {
+      alert("MetaMask is required to use this application.");
     }
   };
 
   const createProposal = async () => {
-    setMessage("");
-    if (DAOPlatform) {
-      try {
-        
-        let tx = await DAOPlatform.createProposal(proposalDescription, { gasLimit: 300000 });
-        await tx.wait();
-        setMessage("Proposal created successfully!");
-      } catch (error) {
-        setMessage("Error creating proposal: " + (error.message || error));
-      }
+    if (!proposalDescription) return alert("Proposal description cannot be empty");
+    if (!proposalDuration || proposalDuration <= 0) return alert("Proposal duration must be greater than zero");
+
+    try {
+      setLoading(true);
+
+      // Make sure to convert duration to an integer if it's passed as a string
+      const durationInSeconds = parseInt(proposalDuration);
+
+      const tx = await contract.createProposal(proposalDescription, durationInSeconds); // Pass both parameters (description and duration)
+      await tx.wait(); // Wait for the transaction to be mined
+      setProposalDescription(""); // Clear description input after successful proposal creation
+      setProposalDuration(""); // Clear duration input after successful proposal creation
+      fetchProposals(contract); // Fetch updated proposals list
+    } catch (error) {
+      console.error("Error creating proposal:", error);
+    } finally {
+      setLoading(false);
     }
-  };
+};
+
 
   const voteOnProposal = async () => {
-    setMessage("");
-    
+    if (!proposalId) return alert("Enter a valid Proposal ID");
     try {
-      let tx = await DAOPlatform.vote(proposalId, { gasLimit: 300000 });
+      setLoading(true);
+      const id = parseInt(proposalId);
+      const tx = await contract.voteOnProposal(id);
       await tx.wait();
-      setMessage("Voted successfully!");
+      fetchProposals(contract);
     } catch (error) {
-      setMessage("Error voting: " + (error.message || error));
-      console.error("Vote error:", error);
+      console.error("Error voting on proposal:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
   const closeProposal = async () => {
-    setMessage("");
-    if (DAOPlatform) {
-      try {
-        let tx = await DAOPlatform.closeProposal(proposalId , { gasLimit: 300000 });
-        await tx.wait();
-        setMessage("Proposal closed successfully!");
-      } catch (error) {
-        setMessage("Error closing proposal: " + (error.message || error));
+    if (!proposalId) return alert("Enter a valid Proposal ID");
+    try {
+      setLoading(true);
+      const id = parseInt(proposalId);
+      const tx = await contract.closeProposal(id);
+      await tx.wait();
+      fetchProposals(contract);
+    } catch (error) {
+      console.error("Error closing proposal:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchProposals = async (contractInstance) => {
+    try {
+      setLoading(true);
+      const count = await contractInstance.getProposalCount();
+      let fetchedProposals = [];
+      for (let i = 0; i < count; i++) {
+        const proposal = await contractInstance.proposals(i);
+        fetchedProposals.push({
+          id: i,
+          description: proposal.description,
+          votes: proposal.votes.toString(),
+          executed: proposal.executed,
+        });
       }
+      setProposals(fetchedProposals);
+    } catch (error) {
+      console.error("Error fetching proposals:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <main className="container">
       <header>
-        <h1>Welcome to DAO Platform</h1>
+        <h1>DAO Platform</h1>
+        {account && <p>Connected Wallet: {account}</p>}
       </header>
-      {ethWallet ? (
-        account ? (
-          <div>
-            <p>Your Account: {account}</p>
-            <p>Governance Token Balance: {tokenBalance}</p>
-            <div>
-              <h3>Create Proposal</h3>
-              <input
-                type="text"
-                placeholder="Proposal Description"
-                value={proposalDescription}
-                onChange={(e) => setProposalDescription(e.target.value)}
-              />
-              <button onClick={createProposal}>Create</button>
-            </div>
-            <div>
-              <h3>Vote on Proposal</h3>
-              <input
-                type="number"
-                placeholder="Proposal ID"
-                value={proposalId}
-                onChange={(e) => setProposalId(e.target.value)}
-              />
-              <button onClick={voteOnProposal}>Vote</button>
-            </div>
-            <div>
-              <h3>Close Proposal</h3>
-              <button onClick={closeProposal}>Close Proposal</button>
-            </div>
-            {message && <p><strong>{message}</strong></p>}
-          </div>
-        ) : (
-          <button onClick={connectAccount}>Connect MetaMask Wallet</button>
-        )
+      <form onSubmit={(e) => { e.preventDefault(); createProposal(); }}>
+  <input
+    type="text"
+    value={proposalDescription}
+    onChange={(e) => setProposalDescription(e.target.value)}
+    placeholder="Enter Proposal Description"
+  />
+  <input
+    type="number"
+    value={proposalDuration}
+    onChange={(e) => setProposalDuration(e.target.value)}
+    placeholder="Proposal Duration in seconds"
+  />
+  <button type="submit" disabled={loading}>
+    {loading ? "Creating Proposal..." : "Create Proposal"}
+  </button>
+</form>
+
+      {!account ? (
+        <button onClick={connectWallet}>Connect MetaMask</button>
       ) : (
-        <p>Please install MetaMask to use this DAO Platform.</p>
+        
+        <div className="content">
+          {/* Create Proposal */}
+          
+           
+         
+
+          {/* Vote on Proposal */}
+        <div className="section">
+            <h3>Vote on Proposal</h3>
+            <input
+              type="number"
+              placeholder="Proposal ID"
+              value={proposalId}
+              onChange={(e) => setProposalId(e.target.value)}
+            />
+            
+              <button onClick={voteOnProposal} disabled={loading}>
+              {loading ? "Voting..." : "Vote"}
+            </button>
+
+            
+          </div>
+
+          {/* Close Proposal */}
+          <div className="section">
+            <h3>Close Proposal</h3>
+            <button onClick={closeProposal} disabled={loading}>
+              Close
+            </button>
+          </div>
+
+          {/* Display Proposals */}
+          <div className="section">
+            <h3>Proposals</h3>
+            {loading ? (
+              <p>Loading proposals...</p>
+            ) : proposals.length > 0 ? (
+              proposals.map((proposal) => (
+                <div key={proposal.id} className="proposal">
+                  <p>
+                    <strong>ID:</strong> {proposal.id}
+                  </p>
+                  <p>
+                    <strong>Description:</strong> {proposal.description}
+                  </p>
+                  <p>
+                    <strong>Votes:</strong> {proposal.votes}
+                  </p>
+                  <p>
+                    <strong>Executed:</strong> {proposal.executed ? "Yes" : "No"}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p>No proposals found.</p>
+            )}
+          </div>
+        </div>
       )}
+
       <style jsx>{`
         .container {
           text-align: center;
-          background-color: white;
-          color: black;
-          font-family: "Times New Roman", serif;
-          border: 10px solid black;
-          border-radius: 20px;
-          background-image: url("https://i.pinimg.com/736x/52/55/74/525574293de5cd959d11a551b85fd791.jpg");
+          background: #f9f9f9;
+          color: #333;
+          font-family: "Inter", sans-serif;
+          border-radius: 12px;
+          background-image: url("https://i.pinimg.com/originals/34/93/4f/34934ff0d94d085d02e5ceb345ecde66.jpg");
           background-size: cover;
           background-position: center;
           background-repeat: no-repeat;
-          height: 900px;
-          width: 1500px;
-          
-          font-weight: 1000;
+          height: 100vh;
+          width: 100%;
           padding: 20px;
+          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+          display: flex;
+          justify-content: center;
+          align-items: center;
         }
 
-        h1 {
-          font-family: "Arial", serif;
-          font-size: 60px;
-          margin-bottom: 20px;
-        }
-          .content {
+        .content {
           display: flex;
-          flex-direction: row;
-          justify-content: space-around;
-          width: 100%;
+          flex-wrap: wrap;
+          gap: 16px;
+          justify-content: center;
         }
 
         .section {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          background: rgba(255, 255, 255, 0.8);
-          padding: 20px;
-          border-radius: 10px;
-          box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-          width: 300px;
+          background: white;
+          padding: 16px;
+          border-radius: 8px;
+          box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+          text-align: center;
+          width: 240px;
         }
 
-        input {
-          margin: 10px;
-          padding: 10px;
-          border-radius: 5px;
-          border: 1px solid #ccc;
+        input,
+        button {
+          margin-top: 10px;
+          padding: 8px;
+          width: 100%;
+          border-radius: 6px;
+          font-size: 16px;
         }
 
         button {
-          background-color: #4caf50;
+          background: #007bff;
           color: white;
-          border: none;
-          padding: 10px 20px;
-          font-size: 18px;
           cursor: pointer;
-          border-radius: 5px;
-          box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+          border: none;
         }
 
         button:hover {
-          background-color: #388e3c;
+          background: #0056b3;
         }
       `}</style>
     </main>
